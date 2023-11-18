@@ -338,6 +338,7 @@ class ObjectDetectionLearner(BaseLearner):
         model: Optional[nn.Module] = None,
         standalone: bool = True,
         clean_ckpts: bool = True,
+        sync_path: Optional[str] = None,
     ):
         self.on_fit_per_run_start(seed=seed, save_path=save_path)
         config = self.get_config_per_run(config=config, hyperparameters=hyperparameters)
@@ -419,6 +420,7 @@ class ObjectDetectionLearner(BaseLearner):
             df_preprocessor=df_preprocessor,
             data_processors=data_processors,
             model=model,
+            sync_path=sync_path,
         )
 
         return dict(

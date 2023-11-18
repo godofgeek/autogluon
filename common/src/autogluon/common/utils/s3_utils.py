@@ -216,6 +216,7 @@ def get_s3_to_local_tuple_list_from_s3_folder(*, s3_bucket: str, s3_prefix: str,
     if len(s3_prefix) > 0:
         assert s3_prefix.endswith("/"), "Please provide a prefix to a folder and end it with '/'"
     objs = list_bucket_prefix_suffix_contains_s3(bucket=s3_bucket, prefix=s3_prefix, **kwargs)
+    objs = [obj for obj in objs if obj != s3_prefix]
     s3_to_local_tuple_list = get_s3_to_local_tuple_list(s3_bucket=s3_bucket, s3_prefix=s3_prefix, local_path=local_path, s3_prefixes=objs)
     return s3_to_local_tuple_list
 

@@ -24,13 +24,14 @@ from ..utils import (
     check_if_packages_installed,
     cocoeval,
     convert_pred_to_xywh,
+    convert_result_df,
     create_fusion_model,
     extract_from_output,
     from_coco_or_voc,
     get_detection_classes,
     object_detection_data_to_df,
     save_ovd_result_df,
-    save_result_df,
+    save_result_coco_format,
     setup_save_path,
     split_train_tuning_data,
 )
@@ -84,6 +85,8 @@ class ObjectDetectionLearner(BaseLearner):
         )
         check_if_packages_installed(problem_type=self._problem_type)
 
+        self._config = self.get_config_per_run(config=self._config, hyperparameters=hyperparameters)
+
         self._output_shape = num_classes
         self._classes = classes
         self._sample_data_path = sample_data_path
@@ -113,10 +116,18 @@ class ObjectDetectionLearner(BaseLearner):
     def setup_detection_train_tuning_data(self, max_num_tuning_data, seed, train_data, tuning_data):
         if isinstance(train_data, str):
             self._detection_anno_train = train_data
-            train_data = from_coco_or_voc(train_data, "train")  # TODO: Refactor to use convert_data_to_df
+            train_data = from_coco_or_voc(
+                train_data,
+                "train",
+                coco_root=self._config.model.mmdet_image.coco_root,
+            )  # TODO: Refactor to use convert_data_to_df
             if tuning_data is not None:
                 self.detection_anno_train = tuning_data
-                tuning_data = from_coco_or_voc(tuning_data, "val")  # TODO: Refactor to use convert_data_to_df
+                tuning_data = from_coco_or_voc(
+                    tuning_data,
+                    "val",
+                    coco_root=self._config.model.mmdet_image.coco_root,
+                )  # TODO: Refactor to use convert_data_to_df
                 if max_num_tuning_data is not None:
                     if len(tuning_data) > max_num_tuning_data:
                         tuning_data = tuning_data.sample(
@@ -125,10 +136,16 @@ class ObjectDetectionLearner(BaseLearner):
         elif isinstance(train_data, pd.DataFrame):
             self._detection_anno_train = None
             # sanity check dataframe columns
-            train_data = object_detection_data_to_df(train_data)
+            train_data = object_detection_data_to_df(
+                train_data,
+                coco_root=self._config.model.mmdet_image.coco_root,
+            )
             if tuning_data is not None:
                 self.detection_anno_train = tuning_data
-                tuning_data = object_detection_data_to_df(tuning_data)
+                tuning_data = object_detection_data_to_df(
+                    tuning_data,
+                    coco_root=self._config.model.mmdet_image.coco_root,
+                )
                 if max_num_tuning_data is not None:
                     if len(tuning_data) > max_num_tuning_data:
                         tuning_data = tuning_data.sample(
@@ -570,7 +587,9 @@ class ObjectDetectionLearner(BaseLearner):
         if isinstance(anno_file_or_df, str):
             anno_file = anno_file_or_df
             data = from_coco_or_voc(
-                anno_file, "test"
+                anno_file,
+                "test",
+                coco_root=self._config.model.mmdet_image.coco_root,
             )  # TODO: maybe remove default splits hardcoding (only used in VOC)
             if os.path.isdir(anno_file):
                 eval_tool = "torchmetrics"  # we can only use torchmetrics for VOC format evaluation.
@@ -652,7 +671,10 @@ class ObjectDetectionLearner(BaseLearner):
                 eval_tool=eval_tool,
             )
         else:
-            data = object_detection_data_to_df(data)
+            data = object_detection_data_to_df(
+                data,
+                coco_root=self._config.model.mmdet_image.coco_root,
+            )
             return self.evaluate_coco(
                 anno_file_or_df=data,
                 metrics=metrics,
@@ -664,6 +686,7 @@ class ObjectDetectionLearner(BaseLearner):
         self,
         data: Union[pd.DataFrame, dict, list, str],
         as_pandas: Optional[bool] = None,
+        as_coco: Optional[bool] = True,
         realtime: Optional[bool] = False,
         save_results: Optional[bool] = None,
         **kwargs,
@@ -678,6 +701,8 @@ class ObjectDetectionLearner(BaseLearner):
             follow same format (except for the `label` column).
         as_pandas
             Whether to return the output as a pandas DataFrame(Series) (True) or numpy array (False).
+        as_coco
+            Whether to save the output as a COCO json file (True) or pandas DataFrame (False).
         realtime
             Whether to do realtime inference, which is efficient for small data (default False).
             If provided None, we would infer it on based on the data modalities
@@ -690,58 +715,74 @@ class ObjectDetectionLearner(BaseLearner):
         Array of predictions, one corresponding to each row in given dataset.
         """
         self.ensure_predict_ready()
-        ret_type = BBOX
-        if self._problem_type == OBJECT_DETECTION:
-            data = object_detection_data_to_df(data)
-            if self._label_column not in data:
-                self._label_column = None
-        elif self._problem_type == OPEN_VOCABULARY_OBJECT_DETECTION:
+        if as_pandas is None and isinstance(data, pd.DataFrame):
+            as_pandas = True
+
+        if self._problem_type == OPEN_VOCABULARY_OBJECT_DETECTION:
             ret_type = OVD_RET
+        else:
+            ret_type = BBOX
+
+        # only supports coco/voc format for OBJECT_DETECTION
+        if self._problem_type == OBJECT_DETECTION:
+            data_path = data
+            data_df = object_detection_data_to_df(
+                data_path,
+                coco_root=self._config.model.mmdet_image.coco_root,
+            )
+            if self._label_column not in data_df:
+                self._label_column = None
 
         outputs = self.predict_per_run(
-            data=data,
+            data=data_df,
             realtime=realtime,
             requires_label=False,
         )
         pred = extract_from_output(outputs=outputs, ret_type=ret_type)
+
+        pred_df = convert_result_df(
+            pred=convert_pred_to_xywh(pred) if self._model.output_bbox_format == XYWH else pred,
+            data=data_df,
+            detection_classes=self._model.model.CLASSES,
+            result_path=result_path,
+        )
+
         if self._problem_type == OBJECT_DETECTION:
-            if self._model.output_bbox_format == XYWH:
-                pred = convert_pred_to_xywh(pred)
+            result_path = os.path.join(self._save_path, "result.txt")
 
-        if save_results and self._problem_type == OBJECT_DETECTION:
-            self._save_path = setup_save_path(
-                old_save_path=self._save_path,
-                warn_if_exist=False,
-            )
-            save_result_df(
-                pred=pred,
-                data=data,
-                detection_classes=self._model.model.CLASSES,
-                result_path=os.path.join(self._save_path, "result.txt"),
-            )
-
-        if (as_pandas is None and isinstance(data, pd.DataFrame)) or as_pandas is True:
-            if (
-                self._problem_type == OBJECT_DETECTION
-            ):  # TODO: add prediction output in COCO format if as_pandas is False
-                # TODO: calling save_result_df to convert data to dataframe is not a good logic
-                # TODO: consider combining this with the above saving logic or using a different function.
-                pred = save_result_df(
-                    pred=pred,
-                    data=data,
-                    detection_classes=self._model.model.CLASSES,
-                    result_path=None,
+            if save_results:
+                self._save_path = setup_save_path(
+                    old_save_path=self._save_path,
+                    warn_if_exist=False,
                 )
-            elif (
-                self._problem_type == OPEN_VOCABULARY_OBJECT_DETECTION
-            ):  # TODO: refactor and merge with OBJECT DETECTION
+                if as_coco:
+                    result_path = os.path.join(self._save_path, "result.json")
+                    save_result_coco_format(
+                        data_path=data_path,
+                        pred=pred,
+                        result_path=pred,
+                        coco_root=self._config.model.mmdet_image.coco_root,
+                    )
+                else:
+                    pred_df.to_csv(result_path, index=False)
+                logger.info(f"Saved detection results {'as coco' if as_coco else 'as dataframe'} to {result_path}")
+
+        # TODO: refactor and merge with OBJECT DETECTION
+        if self._problem_type == OPEN_VOCABULARY_OBJECT_DETECTION:
+            if as_pandas:
                 pred = save_ovd_result_df(
                     pred=pred,
                     data=data,
                     result_path=None,
                 )
+            return pred
 
-        return pred
+        if as_pandas:
+            return pred_df
+        else:
+            if self._model.output_bbox_format == XYWH:
+                pred = convert_pred_to_xywh(pred)
+            return pred
 
     def predict_proba(
         self,

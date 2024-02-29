@@ -139,6 +139,12 @@ def test_mmdet_object_detection_inference_basics(checkpoint_name):
     # Inference on data without annotations
     pred = predictor.predict(test_path_with_images_only)
 
+    # Save inference in COCO on data without annotations
+    pred = predictor.predict(test_path_with_images_only, save_result=True)
+
+    # Save inference in COCO on data without annotations
+    pred = predictor.predict(test_path_with_images_only, save_result=True, as_coco=False)
+
 
 # TODO: FIX DDP multi runs!
 @pytest.mark.single_gpu
@@ -326,3 +332,22 @@ def test_detector_hyperparameters_consistency():
         time_limit=10,
     )
     assert predictor._learner._config == predictor_2._learner._config
+
+
+def test_detector_coco_root_setup():
+    data_dir = download_sample_dataset()
+    train_path = os.path.join(data_dir, "Annotations", "trainval_cocoformat.json")
+    train_df = from_coco_or_voc(train_path)
+
+    hyperparameters = {
+        "model.mmdet_image.coco_root": "../",
+        "env.num_gpus": 1,  # no need to test multigpu
+    }
+
+    # pass hyperparameters to init()
+    predictor = MultiModalPredictor(
+        problem_type="object_detection",
+        sample_data_path=train_df,
+        hyperparameters=hyperparameters,
+    )
+    predictor.fit(train_df, time_limit=10)

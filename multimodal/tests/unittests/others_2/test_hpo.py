@@ -1,5 +1,6 @@
 import os
 import shutil
+import uuid
 
 import pytest
 from ray import tune
@@ -163,9 +164,10 @@ def test_hpo_distillation(searcher, scheduler):
         eval_metric=dataset.metric,
     )
 
-    teacher_save_path = os.path.join(get_home_dir(), "hpo_distillation_teacher", f"_{searcher}", f"_{scheduler}")
-    if os.path.exists(teacher_save_path):
-        shutil.rmtree(teacher_save_path)
+    unique_id = str(uuid.uuid4())
+    teacher_save_path = os.path.join(
+        get_home_dir(), "hpo_distillation_teacher", f"_{searcher}_{scheduler}_{unique_id}"
+    )
 
     teacher_predictor.fit(
         train_data=dataset.train_df,
@@ -189,9 +191,9 @@ def test_hpo_distillation(searcher, scheduler):
         eval_metric=dataset.metric,
     )
 
-    student_save_path = os.path.join(get_home_dir(), "hpo_distillation_student", f"_{searcher}", f"_{scheduler}")
-    if os.path.exists(student_save_path):
-        shutil.rmtree(student_save_path)
+    student_save_path = os.path.join(
+        get_home_dir(), "hpo_distillation_student", f"_{searcher}_{scheduler}_{unique_id}"
+    )
 
     predictor.fit(
         train_data=dataset.train_df,
